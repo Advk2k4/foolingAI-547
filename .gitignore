@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Data (large files — download via MOABB)
+data/raw/
+~/mne_data/
+
+# Saved models and numpy arrays (regenerate via scripts)
+results/*.pkl
+results/*.npy
+
+# Figures (regenerate via scripts)
+figures/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
