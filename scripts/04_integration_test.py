@@ -11,9 +11,12 @@ import importlib.util
 import numpy as np
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from fbcsp import FilterBankCSP  # noqa: F401 — required for pickle to resolve model.pkl
+
 RANDOM_SEED = 42
 RESULTS_DIR = Path("results")
-CLASS_NAMES = {0: "left hand", 1: "right hand"}
+CLASS_NAMES = {0: "feet", 1: "left_hand", 2: "rest"}
 PERTURBATION_MAGNITUDE_UV = 1.0
 N_POINTS = 1
 

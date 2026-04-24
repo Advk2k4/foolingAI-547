@@ -5,8 +5,12 @@ and verify imperceptibility via SNR.
 Run from project root: python scripts/03_perturbation.py
 """
 
+import sys
 import numpy as np
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from fbcsp import FilterBankCSP  # noqa: F401 — required for pickle to resolve model.pkl
 
 RANDOM_SEED = 42
 MAGNITUDE_SWEEP_UV = [0.5, 1.0, 2.0, 5.0, 10.0]  # µV
@@ -144,24 +148,58 @@ class TargetedPerturbationEngine(PerturbationEngine):
     """
 
     def compute_gradient(self, trial: np.ndarray, pipeline) -> np.ndarray:
-        """Return ∂(LDA decision score)/∂trial, shape (n_channels, n_times).
+        """Return ∂(margin probability)/∂trial, shape (n_channels, n_times).
 
-        Args:
-            trial: Bandpass-filtered EEG (n_channels, n_times).
-            pipeline: Fitted sklearn Pipeline with named steps 'csp' and 'lda'.
+        Strategy:
+          1. Numerical gradient of (proba[runner_up] - proba[predicted]) w.r.t.
+             the 36-dimensional scaled FBCSP features — only 72 SVM evaluations.
+          2. Backpropagate analytically through StandardScaler and FBCSP.
         """
-        csp = pipeline.named_steps["csp"]
-        lda = pipeline.named_steps["lda"]
+        fbcsp  = pipeline.named_steps["fbcsp"]
+        scaler = pipeline.named_steps["scaler"]
+        svm    = pipeline.named_steps["svm"]
 
-        W = csp.filters_[: csp.n_components, :]   # (n_components, n_channels) — filters_ is full (n_ch, n_ch)
-        Z = W @ trial                             # (n_components, n_times)
-        T = Z.shape[1]
+        feat_raw    = fbcsp.transform(trial[np.newaxis])       # (1, n_feat)
+        feat_scaled = scaler.transform(feat_raw)               # (1, n_feat)
 
-        v = (Z ** 2).mean(axis=1)                 # E[Z^2] per component — matches MNE CSP
-        w_lda = lda.coef_[0]                      # (n_components,)
-        alpha = 2.0 * w_lda / (v * T)            # (n_components,)
+        proba       = svm.predict_proba(feat_scaled)[0]        # (n_classes,)
+        ranked      = np.argsort(proba)
+        predicted   = ranked[-1]
+        runner_up   = ranked[-2]
 
-        return W.T @ (alpha[:, np.newaxis] * Z)   # (n_channels, n_times)
+        # Numerical gradient in scaled feature space (finite differences)
+        eps = 1e-4
+        n_feat = feat_scaled.shape[1]
+        grad_feat_scaled = np.zeros(n_feat)
+        for i in range(n_feat):
+            fp = feat_scaled.copy(); fp[0, i] += eps
+            fm = feat_scaled.copy(); fm[0, i] -= eps
+            pp = svm.predict_proba(fp)[0]
+            pm = svm.predict_proba(fm)[0]
+            grad_feat_scaled[i] = (
+                (pp[runner_up] - pm[runner_up]) - (pp[predicted] - pm[predicted])
+            ) / (2 * eps)
+
+        # Backpropagate through StandardScaler: grad_raw = grad_scaled / scale
+        grad_feat_raw = grad_feat_scaled / scaler.scale_       # (n_feat,)
+
+        # Backpropagate analytically through FBCSP (sum across bands)
+        n_comp = fbcsp.n_components
+        grad_trial = np.zeros_like(trial, dtype=np.float64)
+
+        for band_idx, ((low, high), csp) in enumerate(
+            zip(fbcsp.freq_bands, fbcsp.csps_)
+        ):
+            X_band = fbcsp._bandpass(trial[np.newaxis], low, high)[0]
+            W = csp.filters_[:n_comp, :]                       # (n_comp, n_channels)
+            Z = W @ X_band                                     # (n_comp, n_times)
+            T = Z.shape[1]
+            v = (Z ** 2).mean(axis=1)                          # (n_comp,)
+            w_k = grad_feat_raw[band_idx * n_comp: (band_idx + 1) * n_comp]
+            alpha = 2.0 * w_k / (v * T)
+            grad_trial += W.T @ (alpha[:, np.newaxis] * Z)
+
+        return grad_trial
 
     def apply_targeted_perturbation(
         self,
@@ -186,8 +224,8 @@ class TargetedPerturbationEngine(PerturbationEngine):
         importance = np.linalg.norm(grad, axis=0)          # (n_times,)
         top_indices = np.argsort(importance)[-num_points:]  # highest-impact time points
 
-        decision = pipeline.decision_function(trial[np.newaxis])[0]
-        flip_sign = -np.sign(decision)  # push score toward opposite class
+        # Gradient already points toward runner-up; always add it (flip_sign = +1)
+        flip_sign = 1.0
 
         perturbed = trial.copy().astype(np.float64)
         delta_v = magnitude_uv * self.UV_TO_V

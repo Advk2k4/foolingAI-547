@@ -1,7 +1,7 @@
 """
 02_load_pretrained.py - foolingAI-547
-Load a pre-trained MOABB pipeline (CSP + LDA) for Motor Imagery classification,
-evaluate baseline accuracy, and save artefacts for downstream scripts.
+Load the BCI Competition IV 2a-style dataset (4-class Motor Imagery),
+train FBCSP + LDA, evaluate baseline accuracy, and save artefacts.
 Run from project root: python scripts/02_load_pretrained.py
 """
 
@@ -12,74 +12,68 @@ from pathlib import Path
 from sklearn.model_selection import train_test_split
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score, classification_report
+from fbcsp import FilterBankCSP, FREQ_BANDS, CSP_COMPONENTS_PER_BAND, SFREQ
 
 RANDOM_SEED = 42
 TEST_SIZE = 0.25
 RESULTS_DIR = Path("results")
 DATA_DIR = Path("data/raw")
-EXPECTED_ACCURACY_MIN = 0.55  # Lower bound; real MI accuracy varies by subject
-TRAIN_SUBJECT = 1  # Train within a single subject — cross-subject CSP+LDA is at chance
+EXPECTED_ACCURACY_MIN = 0.60
+
+NEW_DATA_PATH   = DATA_DIR / "FINAL_dataset_547_data_300.npy"
+NEW_LABELS_PATH = DATA_DIR / "NEW_dataset_547_labels_300.npy"
+
+LABEL_MAP   = {"feet": 0, "left_hand": 1, "rest": 2}  # right_hand excluded (poor separability)
+CLASS_NAMES = {v: k for k, v in LABEL_MAP.items()}
 
 
 def load_raw_data():
-    """Load X, y from data/raw/, filtered to TRAIN_SUBJECT (written by script 01)."""
-    x_path = DATA_DIR / "X_raw.npy"
-    y_path = DATA_DIR / "y_raw.npy"
-    sid_path = DATA_DIR / "subject_ids.npy"
-
-    for p in (x_path, y_path, sid_path):
+    """Load 4-class dataset, convert labels to ints, rescale µV → V."""
+    for p in (NEW_DATA_PATH, NEW_LABELS_PATH):
         if not p.exists():
-            print(f"ERROR: {p} not found. Run 01_moabb_setup.py first.")
+            print(f"ERROR: {p} not found. Check data/raw/.")
             sys.exit(1)
 
-    X = np.load(x_path)
-    y = np.load(y_path)
-    subject_ids = np.load(sid_path)
+    X = np.load(NEW_DATA_PATH) * 1e-6          # µV → V
+    y_raw = np.load(NEW_LABELS_PATH)
 
-    mask = subject_ids == TRAIN_SUBJECT
-    X, y = X[mask], y[mask]
-    print(f"  Subject {TRAIN_SUBJECT}: {X.shape[0]} trials, {X.shape[1]} channels")
+    # Filter to 3 classes only
+    mask = np.array([label in LABEL_MAP for label in y_raw])
+    X = X[mask]
+    y_raw = y_raw[mask]
+    y = np.array([LABEL_MAP[label] for label in y_raw], dtype=int)
+
+    classes, counts = np.unique(y, return_counts=True)
+    print(f"  Loaded: {X.shape[0]} trials, {X.shape[1]} channels, {X.shape[2]} time points")
+    print(f"  Classes: { {CLASS_NAMES[c]: int(n) for c, n in zip(classes, counts)} }")
+    print(f"  Signal range: [{X.min():.2e}, {X.max():.2e}] V")
     return X, y
 
 
-def build_csp_lda_pipeline():
-    """Build a CSP + LDA Motor Imagery pipeline (standard MOABB benchmark).
+def build_fbcsp_pipeline():
+    """Build FBCSP + StandardScaler + SVM pipeline.
 
-    CSP (Common Spatial Patterns) is the canonical EEG feature extractor.
-    LDA is the standard linear classifier for BCI research.
-
-    Returns:
-        sklearn.pipeline.Pipeline
+    FBCSP: 6 narrow bands (4-8, 8-12, 12-16, 16-20, 20-24, 24-30 Hz) × 4 CSP
+    components = 24 features. StandardScaler normalises features before SVM.
+    RBF-SVM consistently outperforms LDA for MI classification in small-sample regimes.
     """
-    from mne.decoding import CSP
-
     pipeline = Pipeline([
-        ("csp", CSP(n_components=4, reg=None, log=True, norm_trace=False)),
-        ("lda", LinearDiscriminantAnalysis()),
+        ("fbcsp",  FilterBankCSP(freq_bands=FREQ_BANDS,
+                                 n_components=CSP_COMPONENTS_PER_BAND,
+                                 sfreq=SFREQ)),
+        ("scaler", StandardScaler()),
+        ("svm",    SVC(kernel="rbf", C=100, gamma="scale", probability=True)),
     ])
     return pipeline
 
 
-def preprocess_and_split(X, y):
-    """Apply bandpass filter and split into train/test sets.
-
-    Args:
-        X: Raw EEG (n_trials, n_channels, n_times)
-        y: Integer labels
-
-    Returns:
-        X_train, X_test, y_train, y_test (all numpy arrays)
-    """
-    from scipy.signal import butter, sosfiltfilt
-
-    print("  Applying bandpass filter (8-30 Hz, motor imagery band)...")
-    sfreq = 160.0
-    sos = butter(4, [8.0, 30.0], btype="bandpass", fs=sfreq, output="sos")
-    X_filt = sosfiltfilt(sos, X, axis=-1)
-
+def split_data(X, y):
+    """Stratified 75/25 train/test split (no pre-filtering — FBCSP handles bands internally)."""
     X_train, X_test, y_train, y_test = train_test_split(
-        X_filt, y,
+        X, y,
         test_size=TEST_SIZE,
         random_state=RANDOM_SEED,
         stratify=y,
@@ -89,17 +83,8 @@ def preprocess_and_split(X, y):
 
 
 def train_and_evaluate(pipeline, X_train, X_test, y_train, y_test):
-    """Fit the pipeline and return test accuracy.
-
-    Args:
-        pipeline: sklearn Pipeline
-        X_train, y_train: training data
-        X_test, y_test: test data
-
-    Returns:
-        float: test accuracy
-    """
-    print("  Fitting CSP + LDA pipeline...")
+    """Fit the pipeline and report test accuracy."""
+    print("  Fitting FBCSP + SVM pipeline...")
     pipeline.fit(X_train, y_train)
 
     y_pred = pipeline.predict(X_test)
@@ -107,50 +92,50 @@ def train_and_evaluate(pipeline, X_train, X_test, y_train, y_test):
 
     print(f"\n  Baseline accuracy: {acc * 100:.2f}%")
     print("\n  Classification Report:")
-    print(classification_report(y_test, y_pred,
-                                target_names=["Left Hand", "Right Hand"],
-                                digits=3))
+    print(classification_report(
+        y_test, y_pred,
+        target_names=[CLASS_NAMES[i] for i in sorted(CLASS_NAMES)],
+        digits=3,
+    ))
     return acc, y_pred
 
 
 def save_artefacts(pipeline, X_test, y_test):
-    """Persist model and test data for scripts 03/04 and Havi's experiments."""
+    """Persist model and test data for scripts 03/04."""
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-
     with open(RESULTS_DIR / "model.pkl", "wb") as f:
         pickle.dump(pipeline, f)
-
     np.save(RESULTS_DIR / "X_test.npy", X_test)
     np.save(RESULTS_DIR / "y_test.npy", y_test)
-
     print(f"\n  Saved artefacts to {RESULTS_DIR}/:")
-    print(f"    model.pkl       — trained CSP + LDA pipeline")
-    print(f"    X_test.npy      — {X_test.shape[0]} test trials")
-    print(f"    y_test.npy      — {y_test.shape[0]} test labels")
+    print(f"    model.pkl  — FBCSP + LDA pipeline (4-class)")
+    print(f"    X_test.npy — {X_test.shape[0]} test trials")
+    print(f"    y_test.npy — {y_test.shape[0]} test labels")
 
 
 def run():
     np.random.seed(RANDOM_SEED)
 
     print("=" * 55)
-    print("foolingAI-547  |  Script 02: Load Pre-Trained Model")
+    print("foolingAI-547  |  Script 02: FBCSP + SVM Model")
     print("=" * 55)
 
-    print("\nLoading raw data...")
+    print("\nLoading dataset...")
     X, y = load_raw_data()
 
-    print("\nPreprocessing and splitting data...")
-    X_train, X_test, y_train, y_test = preprocess_and_split(X, y)
+    print("\nSplitting data (FBCSP filters internally)...")
+    X_train, X_test, y_train, y_test = split_data(X, y)
 
-    print("\nBuilding CSP + LDA pipeline...")
-    pipeline = build_csp_lda_pipeline()
+    print(f"\nBuilding FBCSP pipeline ({len(FREQ_BANDS)} bands × "
+          f"{CSP_COMPONENTS_PER_BAND} components = "
+          f"{len(FREQ_BANDS)*CSP_COMPONENTS_PER_BAND} features)...")
+    pipeline = build_fbcsp_pipeline()
 
     print("\nTraining and evaluating...")
     acc, _ = train_and_evaluate(pipeline, X_train, X_test, y_train, y_test)
 
     if acc < EXPECTED_ACCURACY_MIN:
-        print(f"  WARNING: Accuracy {acc:.2%} is below expected minimum "
-              f"({EXPECTED_ACCURACY_MIN:.0%}). This may indicate data issues.")
+        print(f"  WARNING: Accuracy {acc:.2%} below expected minimum ({EXPECTED_ACCURACY_MIN:.0%}).")
     else:
         print(f"  Accuracy within expected range. Pipeline is healthy.")
 
