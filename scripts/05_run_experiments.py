@@ -20,10 +20,10 @@ import importlib.util
 import time
 import numpy as np
 from pathlib import Path
-from scipy.signal import butter, sosfiltfilt
 from sklearn.model_selection import train_test_split
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -35,7 +35,7 @@ RESULTS_DIR = Path("results")
 DATA_DIR = Path("data/raw")
 OUTPUT_CSV = RESULTS_DIR / "experiment_log.csv"
 
-SUBJECTS = list(range(1, 11))        # Subjects 1-10, matching script 01
+SUBJECTS = [1]                        # Single subject — FINAL_dataset_547
 TEST_SIZE = 0.25
 SFREQ = 160.0                        # PhysioNet sampling rate
 
@@ -74,37 +74,49 @@ def load_perturbation_module():
     return mod
 
 
-def load_all_raw_data():
-    """Load full raw arrays and subject IDs saved by script 01."""
-    x_path = DATA_DIR / "X_raw.npy"
-    y_path = DATA_DIR / "y_raw.npy"
-    sid_path = DATA_DIR / "subject_ids.npy"
+LABEL_MAP = {"feet": 0, "left_hand": 1, "rest": 2}  # right_hand excluded
 
-    for p in (x_path, y_path, sid_path):
+
+def load_all_raw_data():
+    """Load FINAL_dataset_547 files and return (X, y_int, subject_ids)."""
+    x_path = DATA_DIR / "FINAL_dataset_547_data_300.npy"
+    y_path = DATA_DIR / "NEW_dataset_547_labels_300.npy"
+
+    for p in (x_path, y_path):
         if not p.exists():
-            print(f"ERROR: {p} not found. Run 01_moabb_setup.py first.")
+            print(f"ERROR: {p} not found. Check data/raw/.")
             sys.exit(1)
 
-    return np.load(x_path), np.load(y_path), np.load(sid_path)
+    X = np.load(x_path) * 1e-6          # µV → V
+    y_raw = np.load(y_path)
+
+    mask = np.array([lbl in LABEL_MAP for lbl in y_raw])
+    X = X[mask]
+    y = np.array([LABEL_MAP[lbl] for lbl in y_raw[mask]], dtype=int)
+    subject_ids = np.ones(len(X), dtype=int)   # all trials → subject 1
+
+    print(f"  Loaded: {X.shape[0]} trials, {X.shape[1]} channels, "
+          f"{X.shape[2]} time points")
+    return X, y, subject_ids
 
 
 def build_csp_lda_pipeline():
-    """Build a fresh CSP + LDA pipeline (same as script 02)."""
-    from mne.decoding import CSP
+    """Build FBCSP + StandardScaler + RBF-SVM pipeline (matches script 02)."""
+    from fbcsp import FilterBankCSP, FREQ_BANDS, CSP_COMPONENTS_PER_BAND
 
     return Pipeline([
-        ("csp", CSP(n_components=4, reg=None, log=True, norm_trace=False)),
-        ("lda", LinearDiscriminantAnalysis()),
+        ("fbcsp",  FilterBankCSP(freq_bands=FREQ_BANDS,
+                                 n_components=CSP_COMPONENTS_PER_BAND,
+                                 sfreq=SFREQ)),
+        ("scaler", StandardScaler()),
+        ("svm",    SVC(kernel="rbf", C=100, gamma="scale", probability=True)),
     ])
 
 
 def preprocess_and_split(X, y):
-    """Bandpass filter (8-30 Hz) and train/test split (same as script 02)."""
-    sos = butter(4, [8.0, 30.0], btype="bandpass", fs=SFREQ, output="sos")
-    X_filt = sosfiltfilt(sos, X, axis=-1)
-
+    """Stratified 75/25 train/test split. FBCSP handles band filtering internally."""
     X_train, X_test, y_train, y_test = train_test_split(
-        X_filt, y,
+        X, y,
         test_size=TEST_SIZE,
         random_state=RANDOM_SEED,
         stratify=y,

@@ -19,7 +19,7 @@ RESULTS_DIR = Path("results")
 CSV_PATH = RESULTS_DIR / "experiment_log.csv"
 FIGURES_DIR = RESULTS_DIR / "figures"
 
-MAGNITUDES_UV = [0.5, 1.0, 2.0, 5.0, 10.0]
+PERTURBATION_PCTS = [0.5, 1.0, 2.0, 3.0]   # x-axis knob (% of peak-to-peak)
 SNR_THRESHOLD_DB = 20.0
 
 COLORS = {
@@ -52,21 +52,21 @@ def load_data() -> pd.DataFrame:
 
 
 def fig1_misclassification_rate(df: pd.DataFrame):
-    """Line plot: misclassification rate vs perturbation magnitude."""
+    """Line plot: misclassification rate vs perturbation percentage."""
     fig, ax = plt.subplots(figsize=(7, 4.5))
 
     for attack in ("random", "targeted"):
         for npts in (1, 2):
             subset = df[(df["attack_type"] == attack) & (df["n_points"] == npts)]
             rates = (
-                subset.groupby("magnitude_uv")["misclassified"]
+                subset.groupby("perturbation_pct")["misclassified"]
                 .mean()
-                .reindex(MAGNITUDES_UV) * 100
+                .reindex(PERTURBATION_PCTS) * 100
             )
             key = (attack, npts)
             label = f"{attack.capitalize()} ({npts}-pt)"
             ax.plot(
-                MAGNITUDES_UV,
+                PERTURBATION_PCTS,
                 rates.values,
                 color=COLORS[key],
                 linestyle=LINE_STYLES[key],
@@ -77,10 +77,11 @@ def fig1_misclassification_rate(df: pd.DataFrame):
             )
 
     ax.axhline(y=0, color="gray", linewidth=0.5, linestyle=":")
-    ax.set_xlabel("Perturbation Magnitude (µV)", fontsize=12)
+    ax.set_xlabel("Perturbation (% of signal peak-to-peak)", fontsize=12)
     ax.set_ylabel("Misclassification Rate (%)", fontsize=12)
     ax.set_title("Adversarial Attack Effectiveness\nvs Perturbation Magnitude", fontsize=13)
-    ax.set_xticks(MAGNITUDES_UV)
+    ax.set_xticks(PERTURBATION_PCTS)
+    ax.set_xticklabels([f"{p}%" for p in PERTURBATION_PCTS])
     ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.0f%%"))
     ax.set_ylim(bottom=0)
     ax.legend(fontsize=10, framealpha=0.9)
@@ -94,19 +95,19 @@ def fig1_misclassification_rate(df: pd.DataFrame):
 
 
 def fig2_snr(df: pd.DataFrame):
-    """Line plot: average SNR vs magnitude — confirms imperceptibility."""
+    """Line plot: average SNR vs perturbation % — confirms imperceptibility."""
     fig, ax = plt.subplots(figsize=(7, 4.5))
 
     for attack in ("random", "targeted"):
         subset = df[df["attack_type"] == attack]
         snrs = (
-            subset.groupby("magnitude_uv")["snr_db"]
+            subset.groupby("perturbation_pct")["snr_db"]
             .mean()
-            .reindex(MAGNITUDES_UV)
+            .reindex(PERTURBATION_PCTS)
         )
         key = (attack, 1)
         ax.plot(
-            MAGNITUDES_UV,
+            PERTURBATION_PCTS,
             snrs.values,
             color=COLORS[key],
             linestyle=LINE_STYLES[key],
@@ -123,10 +124,11 @@ def fig2_snr(df: pd.DataFrame):
         linestyle="--",
         label=f"Imperceptibility threshold ({SNR_THRESHOLD_DB} dB)",
     )
-    ax.set_xlabel("Perturbation Magnitude (µV)", fontsize=12)
+    ax.set_xlabel("Perturbation (% of signal peak-to-peak)", fontsize=12)
     ax.set_ylabel("Average SNR (dB)", fontsize=12)
     ax.set_title("Signal-to-Noise Ratio vs Perturbation Magnitude\n(above threshold = imperceptible)", fontsize=13)
-    ax.set_xticks(MAGNITUDES_UV)
+    ax.set_xticks(PERTURBATION_PCTS)
+    ax.set_xticklabels([f"{p}%" for p in PERTURBATION_PCTS])
     ax.legend(fontsize=10, framealpha=0.9)
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
@@ -138,7 +140,7 @@ def fig2_snr(df: pd.DataFrame):
 
 
 def fig3_heatmap(df: pd.DataFrame):
-    """Heatmap: rows = (attack, n_points), cols = magnitude."""
+    """Heatmap: rows = (attack, n_points), cols = perturbation %."""
     groups = [
         ("random",   1, "Random 1-pt"),
         ("random",   2, "Random 2-pt"),
@@ -146,35 +148,38 @@ def fig3_heatmap(df: pd.DataFrame):
         ("targeted", 2, "Targeted 2-pt"),
     ]
 
-    matrix = np.zeros((len(groups), len(MAGNITUDES_UV)))
+    matrix = np.zeros((len(groups), len(PERTURBATION_PCTS)))
     row_labels = []
 
     for i, (attack, npts, label) in enumerate(groups):
         subset = df[(df["attack_type"] == attack) & (df["n_points"] == npts)]
         rates = (
-            subset.groupby("magnitude_uv")["misclassified"]
+            subset.groupby("perturbation_pct")["misclassified"]
             .mean()
-            .reindex(MAGNITUDES_UV)
+            .reindex(PERTURBATION_PCTS)
             .fillna(0) * 100
         )
         matrix[i] = rates.values
         row_labels.append(label)
 
-    fig, ax = plt.subplots(figsize=(8, 3.5))
-    im = ax.imshow(matrix, aspect="auto", cmap="YlOrRd", vmin=0, vmax=100)
+    # Scale color range to data max so low values still show contrast
+    vmax = max(matrix.max(), 5.0)
 
-    ax.set_xticks(range(len(MAGNITUDES_UV)))
-    ax.set_xticklabels([f"{m}µV" for m in MAGNITUDES_UV], fontsize=11)
+    fig, ax = plt.subplots(figsize=(8, 3.5))
+    im = ax.imshow(matrix, aspect="auto", cmap="YlOrRd", vmin=0, vmax=vmax)
+
+    ax.set_xticks(range(len(PERTURBATION_PCTS)))
+    ax.set_xticklabels([f"{p}%" for p in PERTURBATION_PCTS], fontsize=11)
     ax.set_yticks(range(len(row_labels)))
     ax.set_yticklabels(row_labels, fontsize=11)
-    ax.set_xlabel("Perturbation Magnitude", fontsize=12)
+    ax.set_xlabel("Perturbation (% of peak-to-peak)", fontsize=12)
     ax.set_title("Misclassification Rate Heatmap (%)", fontsize=13)
 
     for i in range(len(groups)):
-        for j in range(len(MAGNITUDES_UV)):
+        for j in range(len(PERTURBATION_PCTS)):
             val = matrix[i, j]
-            text_color = "white" if val > 60 else "black"
-            ax.text(j, i, f"{val:.0f}%", ha="center", va="center",
+            text_color = "white" if val > vmax * 0.6 else "black"
+            ax.text(j, i, f"{val:.1f}%", ha="center", va="center",
                     fontsize=10, color=text_color, fontweight="bold")
 
     plt.colorbar(im, ax=ax, label="Misclassification Rate (%)")
@@ -194,24 +199,24 @@ def print_summary_table(df: pd.DataFrame):
 
     for npts in (1, 2):
         print(f"\n  n_points = {npts}")
-        print(f"  {'Magnitude':<12} {'Random':<12} {'Targeted':<12} {'Δ (targeted−random)'}")
+        print(f"  {'Pert %':<12} {'Random':<12} {'Targeted':<12} {'Δ (targeted−random)'}")
         print("  " + "─" * 52)
-        for mag in MAGNITUDES_UV:
+        for pct in PERTURBATION_PCTS:
             rand_rate = df[
                 (df["attack_type"] == "random") &
                 (df["n_points"] == npts) &
-                (df["magnitude_uv"] == mag)
+                (df["perturbation_pct"] == pct)
             ]["misclassified"].mean() * 100
 
             tgt_rate = df[
                 (df["attack_type"] == "targeted") &
                 (df["n_points"] == npts) &
-                (df["magnitude_uv"] == mag)
+                (df["perturbation_pct"] == pct)
             ]["misclassified"].mean() * 100
 
             delta = tgt_rate - rand_rate
             sign = "+" if delta >= 0 else ""
-            print(f"  {mag:<12} {rand_rate:<12.1f} {tgt_rate:<12.1f} {sign}{delta:.1f}")
+            print(f"  {pct}%{'':<9} {rand_rate:<12.1f} {tgt_rate:<12.1f} {sign}{delta:.1f}")
 
     print("=" * 65)
 
