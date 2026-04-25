@@ -26,6 +26,9 @@ from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import accuracy_score
 
+sys.path.insert(0, str(Path(__file__).parent))
+from fbcsp import FilterBankCSP  # noqa: F401 — required for pickle to resolve model.pkl
+
 # ── Constants ────────────────────────────────────────────────────────────────
 RANDOM_SEED = 42
 RESULTS_DIR = Path("results")

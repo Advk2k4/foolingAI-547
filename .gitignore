@@ -15,16 +15,15 @@ venv/
 .venv/
 env/
 
-# Data (large files — download via MOABB)
-data/raw/
+# Old MOABB/PhysioNet data — not used in current pipeline
+data/raw/X_raw.npy
+data/raw/y_raw.npy
+data/raw/subject_ids.npy
 ~/mne_data/
 
-# Saved models and numpy arrays (regenerate via scripts)
-results/*.pkl
-results/*.npy
-
-# Figures (regenerate via scripts)
-figures/
+# macOS metadata
+data/.DS_Store
+results/.DS_Store
 
 # Jupyter
 .ipynb_checkpoints/
