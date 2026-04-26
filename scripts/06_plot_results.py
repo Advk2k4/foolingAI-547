@@ -1,9 +1,9 @@
 """
 06_plot_results.py - foolingAI-547
 Read experiment_log.csv and produce publication-ready figures:
-  Fig 1 — Misclassification rate vs magnitude (random vs targeted, 1-pt & 2-pt)
-  Fig 2 — SNR vs magnitude (imperceptibility confirmation)
-  Fig 3 — Heatmap: attack_type × magnitude × n_points
+  Fig 1 — Misclassification rate vs perturbation % (random vs targeted, 1-pt & 2-pt)
+  Fig 2 — SNR vs perturbation % (imperceptibility confirmation)
+  Fig 3 — Heatmap: attack_type × perturbation % × n_points
 
 Run from project root: python scripts/06_plot_results.py
 """
@@ -19,7 +19,7 @@ RESULTS_DIR = Path("results")
 CSV_PATH = RESULTS_DIR / "experiment_log.csv"
 FIGURES_DIR = RESULTS_DIR / "figures"
 
-PERTURBATION_PCTS = [0.5, 1.0, 2.0, 3.0]   # x-axis knob (% of peak-to-peak)
+PERTURBATION_PCTS = [5.0, 10.0, 15.0, 20.0]
 SNR_THRESHOLD_DB = 20.0
 
 COLORS = {
@@ -52,7 +52,7 @@ def load_data() -> pd.DataFrame:
 
 
 def fig1_misclassification_rate(df: pd.DataFrame):
-    """Line plot: misclassification rate vs perturbation percentage."""
+    """Line plot: misclassification rate vs perturbation magnitude."""
     fig, ax = plt.subplots(figsize=(7, 4.5))
 
     for attack in ("random", "targeted"):
@@ -77,7 +77,7 @@ def fig1_misclassification_rate(df: pd.DataFrame):
             )
 
     ax.axhline(y=0, color="gray", linewidth=0.5, linestyle=":")
-    ax.set_xlabel("Perturbation (% of signal peak-to-peak)", fontsize=12)
+    ax.set_xlabel("Perturbation Magnitude (% of signal range)", fontsize=12)
     ax.set_ylabel("Misclassification Rate (%)", fontsize=12)
     ax.set_title("Adversarial Attack Effectiveness\nvs Perturbation Magnitude", fontsize=13)
     ax.set_xticks(PERTURBATION_PCTS)
@@ -95,7 +95,7 @@ def fig1_misclassification_rate(df: pd.DataFrame):
 
 
 def fig2_snr(df: pd.DataFrame):
-    """Line plot: average SNR vs perturbation % — confirms imperceptibility."""
+    """Line plot: average SNR vs magnitude — confirms imperceptibility."""
     fig, ax = plt.subplots(figsize=(7, 4.5))
 
     for attack in ("random", "targeted"):
@@ -124,7 +124,7 @@ def fig2_snr(df: pd.DataFrame):
         linestyle="--",
         label=f"Imperceptibility threshold ({SNR_THRESHOLD_DB} dB)",
     )
-    ax.set_xlabel("Perturbation (% of signal peak-to-peak)", fontsize=12)
+    ax.set_xlabel("Perturbation Magnitude (% of signal range)", fontsize=12)
     ax.set_ylabel("Average SNR (dB)", fontsize=12)
     ax.set_title("Signal-to-Noise Ratio vs Perturbation Magnitude\n(above threshold = imperceptible)", fontsize=13)
     ax.set_xticks(PERTURBATION_PCTS)
@@ -162,24 +162,21 @@ def fig3_heatmap(df: pd.DataFrame):
         matrix[i] = rates.values
         row_labels.append(label)
 
-    # Scale color range to data max so low values still show contrast
-    vmax = max(matrix.max(), 5.0)
-
     fig, ax = plt.subplots(figsize=(8, 3.5))
-    im = ax.imshow(matrix, aspect="auto", cmap="YlOrRd", vmin=0, vmax=vmax)
+    im = ax.imshow(matrix, aspect="auto", cmap="YlOrRd", vmin=0, vmax=100)
 
     ax.set_xticks(range(len(PERTURBATION_PCTS)))
     ax.set_xticklabels([f"{p}%" for p in PERTURBATION_PCTS], fontsize=11)
     ax.set_yticks(range(len(row_labels)))
     ax.set_yticklabels(row_labels, fontsize=11)
-    ax.set_xlabel("Perturbation (% of peak-to-peak)", fontsize=12)
+    ax.set_xlabel("Perturbation Magnitude (% of signal range)", fontsize=12)
     ax.set_title("Misclassification Rate Heatmap (%)", fontsize=13)
 
     for i in range(len(groups)):
         for j in range(len(PERTURBATION_PCTS)):
             val = matrix[i, j]
-            text_color = "white" if val > vmax * 0.6 else "black"
-            ax.text(j, i, f"{val:.1f}%", ha="center", va="center",
+            text_color = "white" if val > 60 else "black"
+            ax.text(j, i, f"{val:.0f}%", ha="center", va="center",
                     fontsize=10, color=text_color, fontweight="bold")
 
     plt.colorbar(im, ax=ax, label="Misclassification Rate (%)")
