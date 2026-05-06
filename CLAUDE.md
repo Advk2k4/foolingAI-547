@@ -12,6 +12,27 @@ Expected finding: 1–2 sample point perturbations at 1–10 µV cause dramatic 
 
 ---
 
+## Dataset Provenance: High-Gamma Dataset (Schirrmeister et al., 2017)
+
+**Source:**
+- **Dataset:** High-Gamma Dataset (Schirrmeister et al., 2017)
+- **Paper:** *Deep learning with convolutional neural networks for EEG decoding and visualization*, Human Brain Mapping, 38(11), 5391–5420
+- **Repository:** G-Node GIN (German Neuroinformatics Node)
+- **Raw format:** `.edf` files, 128-channel high-density EEG, 250 Hz, 4-class motor imagery (Left Hand, Right Hand, Feet, Rest), 14 total subjects
+
+**Custom Preprocessing Pipeline:**
+- **Trial selection:** 300 trials sequentially extracted from Subject 1 and Subject 2 only
+- **Spatial downsampling:** Raw 128-channel montage reduced to 22-channel standard 10-20 layout to match BCI Competition IV 2a baseline
+- **Temporal padding:** Raw 4-second epochs (1000 time points) zero-padded to 1001 time points for shape uniformity
+- **Final shape:** `(300, 22, 1001)` → `FINAL_dataset_547_data_300.npy`
+- **Labels:** `NEW_dataset_547_labels_300.npy` (string labels: feet/left_hand/rest/right_hand)
+
+**Why 89.5% accuracy:** Data from only 2 subjects makes this effectively a within-subject task. Cross-subject (all 14) would yield ~50–60%. This must be stated explicitly in the paper methods section.
+
+**Citation:** Schirrmeister, R.T., Springenberg, J.T., Fiederer, L.D.J., Glasstetter, M., Eggensperger, K., Tangermann, M., Hutter, F., Burgard, W., & Ball, T. (2017).
+
+---
+
 ## Run Commands
 
 Always run from project root (`foolingAI-547/`). Scripts run in order:
@@ -43,8 +64,8 @@ data/raw/NEW_dataset_547_labels_300.npy   (string labels: feet/left_hand/rest/ri
     [random attack @ 1µV + magnitude sweep random vs targeted]
     ▼
 05_run_experiments.py
-    [all trials × [0.5,1,2,5,10]µV × [random,targeted] × [1,2] points]
-    →  results/experiment_log.csv
+    [51 correctly-classified trials × [5,10,15,20]% of peak-to-peak × [random,targeted] × [1,2] points]
+    →  results/experiment_log.csv  (1,224 rows)
     ▼
 06_plot_results.py  →  results/figures/fig1_misclassification_rate.png
                         results/figures/fig2_snr.png
@@ -68,7 +89,8 @@ Scripts 04/05 use `importlib.util` to load `PerturbationEngine` from `03_perturb
 | `TEST_SIZE` | `0.25` | `02_load_pretrained.py` |
 | `FREQ_BANDS` | `[(4,8),(8,12),(12,16),(16,20),(20,24),(24,30)]` | `fbcsp.py` |
 | `CSP_COMPONENTS_PER_BAND` | `6` | `fbcsp.py` |
-| `MAGNITUDE_SWEEP_UV` | `[0.5, 1.0, 2.0, 5.0, 10.0]` µV | `03_perturbation.py` |
+| `PERTURBATION_PCTS` | `[5.0, 10.0, 15.0, 20.0]` % of peak-to-peak | `05_run_experiments.py`, `06_plot_results.py` |
+| `MAGNITUDE_SWEEP_UV` | `[0.5, 1.0, 2.0, 5.0, 10.0]` µV | `03_perturbation.py` (script 04 only) |
 | `SNR_THRESHOLD_DB` | `20.0` dB | `03_perturbation.py` |
 | `EXPECTED_ACCURACY_MIN` | `0.60` | `02_load_pretrained.py` |
 | `PERTURBATION_MAGNITUDE_UV` | `1.0` µV | `04_integration_test.py` |
@@ -99,8 +121,9 @@ perturbed = tengine.apply_targeted_perturbation(trial, model, magnitude_uv=1.0, 
 
 ## Experiment Grid
 
-`n_trials × 5 magnitudes × 2 attack types × 2 n_points` experiments.  
-Results in `results/experiment_log.csv`: `trial_id, attack_type, n_points, magnitude_uv, orig_pred, pert_pred, misclassified, snr_db`.
+`51 correctly-classified trials × 4 magnitudes × 2 attack types × 2 n_points = 1,224 experiments`.  
+Knob: `PERTURBATION_PCTS = [5.0, 10.0, 15.0, 20.0]` — percentage of each trial's peak-to-peak amplitude.  
+Results in `results/experiment_log.csv`: `trial_id, attack_type, n_points, perturbation_pct, magnitude_uv, orig_pred, pert_pred, misclassified, snr_db, trial_range_uv`.
 
 ---
 
